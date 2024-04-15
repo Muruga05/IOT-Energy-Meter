@@ -1,0 +1,181 @@
+#define BLYNK_TEMPLATE_ID "TMPL3_VhqRI_J"
+#define BLYNK_TEMPLATE_NAME "Smart Energy Meter
+#define BLYNK_AUTH_TOKEN "lQhamEnXr726GH0LD3SsSTMcL44iwo8I"
+#define BLYNK_PRINT Serial
+
+const char auth[] = "lQhamEnXr726GH0LD3SsSTMcL44iwo8I";
+const char ssid[] = "Redmi 9A";
+const char pass[] = "0123456789";
+
+#include "EmonLib.h"
+#include<Wire.h>
+#include <EEPROM.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <LiquidCrystal_I2C.h>
+#include <HTTPClient.h>
+String GOOGLE_SCRIPT_ID = "AKfycbxtmN559nujf1NZqwo826il7cs9ToHrrsCVyxTiVysWpfCMPDPPbIxPF3eB98SCU_kVgA";
+LiquidCrystal_I2C lcd(0X27,16,2);
+EnergyMonitor emon;
+BlynkTimer timer;
+
+void readKWhFromEEPROM();
+void saveKWhToEEPROM();
+
+double Vrms;
+double Irms;
+double realPower;
+double apparentPower;
+double powerFactor;
+
+int lcd_delay=4000;
+const double costPerKWh = 5;
+double kWh = 0;
+double estimatedCost = 0;
+unsigned long lastMillis = millis();
+const int addrKWh = 0;
+
+void setup() {
+    Serial.begin(9600);
+    delay(1000);
+    Blynk.begin(auth, ssid, pass);
+    WiFi.begin(ssid, pass);
+    Serial.print("Connecting to WiFi: ");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nConnected to WiFi!");
+
+    Serial.println("Waiting for Blynk connection...");
+    while (!Blynk.connected()) {
+        delay(500);
+        Serial.print(".");
+    }
+  Serial.println("\nConnected to Blynk server!");
+  timer.setInterval(2000L,sendEnergyDataToBlynk);
+  lcd.init();
+  lcd.begin(16,2);
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("IOT Energy meter");
+  lcd.setCursor(0, 1);
+  lcd.print("Loading");
+  int l=7;
+  for(int k=0;k<=7;k++){
+    lcd.setCursor(l,1);
+    lcd.print(".");
+    l++;
+    delay(2500);
+  }
+  emon.voltage(35, 83.3, 1.7);  
+  emon.current(34, 2.5);       
+    for (int i = 0; i < 3; i++) { 
+    emon.calcVI(20, 2000);
+  }
+}
+
+void sendEnergyDataToBlynk() {
+   emon.calcVI(20,2000);    
+
+Vrms            = emon.Vrms;             
+Irms            = emon.Irms;             
+realPower       = Vrms*Irms*0.9995;   
+apparentPower   = Vrms*Irms;    
+powerFactor     = realPower/apparentPower;   
+  
+  unsigned long currentMillis = millis();
+  kWh += realPower * (currentMillis - lastMillis) / 36000000.0;
+  estimatedCost = kWh * costPerKWh;
+  lastMillis = currentMillis;
+  yield();
+  saveKWhToEEPROM();
+Serial.println();
+Serial.println("----------------Energy Meter Parameters----------------");
+Serial.print("Supply Voltage: ");
+Serial.println(Vrms);
+Serial.print("Irms: ");
+Serial.println(Irms);
+Serial.print("Real Power: ");
+Serial.println(realPower);
+Serial.print("Apparent Power: ");
+Serial.println(apparentPower);
+Serial.print("Power Factor: ");
+Serial.println(powerFactor);
+Serial.print("Energy Consumed: ");
+Serial.println(kWh);
+Serial.print("Estimated Cost: ");
+Serial.println(estimatedCost);
+
+Blynk.virtualWrite(V0, Vrms);
+Blynk.virtualWrite(V1, Irms);
+Blynk.virtualWrite(V2, realPower);
+Blynk.virtualWrite(V3, kWh);
+Blynk.virtualWrite(V4, estimatedCost);
+
+lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Vrms:");
+  lcd.print(Vrms);
+  lcd.print(" V");
+  lcd.setCursor(0, 1);
+  lcd.print("Irms:");
+  lcd.print(Irms);
+  lcd.print(" A");
+delay(lcd_delay);
+  lcd.clear();
+
+lcd.setCursor(0, 0);
+  lcd.print("Power:");
+  lcd.print(realPower);
+  lcd.print(" W");
+  lcd.setCursor(0, 1);
+  lcd.print("PowerFactor:");
+  lcd.print(powerFactor);
+ delay(lcd_delay);
+  lcd.clear();
+
+lcd.setCursor(0, 0);
+  lcd.print("Consumed:");
+  lcd.print(kWh);
+  lcd.print(" kWh");
+  lcd.setCursor(0, 1);
+  lcd.print("Est.Cost:Rs.");
+  lcd.print(estimatedCost);
+
+}
+
+void loop(){
+  Blynk.run();
+  timer.run();
+
+  String urlFinal = "https://script.google.com/macros/s/"+GOOGLE_SCRIPT_ID+"/exec?"+"Vrms="+ String(Vrms)+ "&Irms=" + String(Irms)+ "&Power=" + String(realPower)+ "&PowerFactor=" + String(powerFactor) + "&Consumption=" + String(kWh)+ "&EstimatedCost=" + String(estimatedCost);
+  String url = "https://docs.google.com/spreadsheets/d/1K0xXA4s1iXtllxyeFt7v-hnui1eS4rAs6V4SgBsv40A/edit#gid=0";
+  Serial.print("Data posted to spreadsheet:");
+  Serial.println(url);
+    HTTPClient http;
+    http.begin(urlFinal.c_str());
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    int httpCode = http.GET();
+    String payload;
+    if (httpCode > 0) {
+      payload = http.getString();
+      Serial.println("Payload: "+payload);    
+    }
+    http.end();
+  delay(500);
+}
+
+void readKWhFromEEPROM() {
+  EEPROM.get(addrKWh, kWh);
+  if (isnan(kWh)) {
+    kWh = 0.0;
+    saveKWhToEEPROM();
+  }
+}
+
+void saveKWhToEEPROM() {
+  EEPROM.put(addrKWh, kWh);
+  EEPROM.commit();
+}
